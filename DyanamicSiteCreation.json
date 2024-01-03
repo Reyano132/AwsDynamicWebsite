@@ -1,0 +1,507 @@
+{
+    
+    "AWSTemplateFormatVersion": "2010-09-09",
+    "Description": "Demonstration of creation of Dyanamic website(AJAX) using S3 and API Gateway",
+    "Parameters" : {
+        "SourceS3Bucket" : {
+          "Type" : "String"
+        },
+        "DestinationS3Bucket" : {
+            "Type" : "String"
+        }
+    },
+
+    "Resources": {
+        "myDynamoDBTable" : {
+            "Type" : "AWS::DynamoDB::Table",
+            "Properties" : {
+                "TableName" : "taskTable",
+                "AttributeDefinitions" : [
+                {
+                    "AttributeName" : "id",
+                    "AttributeType" : "S"   
+                }
+                ],
+                "KeySchema" : [
+                {
+                    "AttributeName" : "id",
+                    "KeyType" : "HASH"
+                }
+                ],
+                "ProvisionedThroughput" : {
+                "ReadCapacityUnits" : "1",
+                "WriteCapacityUnits" : "1"
+                }
+            }
+        },
+
+    "GetDataFunction": {
+        "Type": "AWS::Lambda::Function",
+        "Properties": {
+            "Handler": "crudOnDB.lambda_handler",
+            "Role": {
+                "Fn::GetAtt": [
+                    "LambdaExecutionRole",
+                    "Arn"
+                ]
+            },
+            "Code": {
+                "S3Bucket":{"Ref":"SourceS3Bucket"},
+                "S3Key":"crudOnDB.zip"
+            },
+            "Runtime": "python3.9",
+            "Environment": {
+                "Variables": {
+                    "TABLE": "taskTable"
+                }
+            }
+        }
+    },
+
+    "ApiGatewayRestApi":{
+        "Type": "AWS::ApiGateway::RestApi",
+        "Properties":{
+            "ApiKeySourceType":"HEADER",
+            "Description":"An API Gateway with a Lambda Integration",
+            "EndpointConfiguration":{
+                "Types":["EDGE"]
+            },
+            "Name":"lambda-api"
+        }
+    },
+
+    "ApiGatewayResource":{
+        "Type": "AWS::ApiGateway::Resource",
+        "Properties":{
+            "ParentId":{
+                "Fn::GetAtt": [
+                    "ApiGatewayRestApi",
+                    "RootResourceId"
+                ]
+            },
+            "PathPart":"getTasks",
+            "RestApiId":{
+                "Ref":"ApiGatewayRestApi"
+            }
+        }
+    },
+
+    "ApiGatewayMethod":{
+        "Type": "AWS::ApiGateway::Method",
+        "Properties":{
+            "ApiKeyRequired":false,
+            "AuthorizationType":"NONE",
+            "HttpMethod":"POST",
+            "Integration":{
+                "ConnectionType":"INTERNET",
+                "Credentials":{
+                    "Fn::GetAtt": [
+                        "ApiGatewayIamRole",
+                        "Arn"
+                    ]
+                },
+                "IntegrationHttpMethod":"POST",
+                "TimeoutInMillis":29000,
+                "Type":"AWS_PROXY",
+                "Uri":{ "Fn::Sub": "arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${GetDataFunction.Arn}/invocations" }
+            },
+            "OperationName":"getTasks",
+            "ResourceId":{ "Ref":"ApiGatewayResource"},
+            "RestApiId":{ "Ref":"ApiGatewayRestApi"}
+        }
+    },
+
+    "methodNoteIdOPTIONS": {
+        "Description": "Enable CORS for resource.",
+        "Type": "AWS::ApiGateway::Method",
+        "Properties": {
+            "AuthorizationType": "NONE",
+            "RestApiId": {"Ref": "ApiGatewayRestApi"},
+            "ResourceId": {
+                "Ref": "ApiGatewayResource"
+            },
+            "HttpMethod": "OPTIONS",
+            "Integration": {
+                "Type": "MOCK",
+                "IntegrationResponses": [
+                    {
+                        "ResponseParameters": {
+                            "method.response.header.Access-Control-Allow-Headers": "'Content-Type,Access-Control-Allow-Origin'",
+                            "method.response.header.Access-Control-Allow-Methods": "'DELETE,GET,HEAD,OPTIONS,PATCH,POST,PUT'",
+                            "method.response.header.Access-Control-Allow-Origin": "'*'"
+                        },
+                        "ResponseTemplates": {
+                            "application/json": ""
+                        },
+                        "StatusCode": "200"
+                    }
+                ],
+                "PassthroughBehavior": "WHEN_NO_MATCH",
+                "RequestTemplates": {
+                    "application/json": "{'statusCode': 200}"
+                }
+            },
+            "MethodResponses": [
+                {
+                    "ResponseModels": {
+                        "application/json": "Empty"
+                    },
+                    "ResponseParameters": {
+                        "method.response.header.Access-Control-Allow-Headers": false,
+                        "method.response.header.Access-Control-Allow-Methods": false,
+                        "method.response.header.Access-Control-Allow-Origin": false
+                    },
+                    "StatusCode": "200"
+                }
+            ]
+        }
+    },
+
+    "ApiGatewayModel":{
+        "Type": "AWS::ApiGateway::Model",
+        "Properties":{
+            "ContentType":"application/json",
+            "RestApiId":{"Ref":"ApiGatewayRestApi"}
+        }
+    },
+
+    "ApiGatewayStage":{
+        "Type": "AWS::ApiGateway::Stage",
+        "Properties":{
+            "Description":"Lambda API Stage v0",
+            "DeploymentId":{"Ref":"ApiGatewayDeployment"},
+            "RestApiId":{"Ref":"ApiGatewayRestApi"},
+            "StageName":"v0"
+        }
+    },
+
+    "ApiGatewayDeployment":{
+        "Type": "AWS::ApiGateway::Deployment",
+        "DependsOn":["ApiGatewayMethod","methodNoteIdOPTIONS"],
+        "Properties":{
+            "Description":"Lambda API Deployment",
+            "RestApiId":{"Ref":"ApiGatewayRestApi"}
+        }
+    },
+
+    "ApiGatewayIamRole": {
+        "Type": "AWS::IAM::Role",
+        "Properties": {
+            "AssumeRolePolicyDocument": {
+                "Version": "2012-10-17",
+                "Statement": [
+                    {
+                        "Effect": "Allow",
+                        "Principal": {
+                            "Service": [
+                                "apigateway.amazonaws.com"
+                            ]
+                        },
+                        "Action": [
+                            "sts:AssumeRole"
+                        ]
+                    }
+                ]
+            },
+            "Path": "/",
+            "Policies": [
+                {
+                    "PolicyName": "LambdaAccess",
+                    "PolicyDocument": {
+                        "Version": "2012-10-17",
+                        "Statement": [
+                            {
+                                "Effect": "Allow",
+                                "Action": [
+                                    "logs:*"
+                                ],
+                                "Resource": "arn:aws:logs:*:*:*"
+                            },
+                            {
+                                "Effect": "Allow",
+                                "Action": [
+                                    "lambda:*"
+                                ],
+                                "Resource": "*"
+                            }
+                        ]
+                    }
+                }
+            ]
+        }
+    },
+
+    "HostedBucket": {
+        "Type": "AWS::S3::Bucket",
+        "Properties" : {
+            "BucketName" : {"Ref":"DestinationS3Bucket"},
+            "PublicAccessBlockConfiguration": {
+                "BlockPublicAcls": false,
+                "BlockPublicPolicy": false,
+                "IgnorePublicAcls": false,
+                "RestrictPublicBuckets": false
+                
+              },
+            "WebsiteConfiguration": {
+                "IndexDocument": "index.html",
+                "ErrorDocument": "error.html"
+            }
+        }
+    },
+    "HostedBucketPolicy": {
+        "Type": "AWS::S3::BucketPolicy",
+        "Properties": {
+          "Bucket": {
+            "Ref": "HostedBucket"
+          },
+          "PolicyDocument": {
+            "Version": "2012-10-17",
+            "Statement": [
+              {
+                 "Effect": "Allow",
+                 "Principal": "*",
+                 "Action": "s3:*",
+                 "Resource": {
+                   "Fn::Join": [
+                     "",
+                     [
+                       "arn:aws:s3:::",
+                       {
+                         "Ref": "HostedBucket"
+                       },
+                       "/*"
+                     ]
+                   ]
+                 }
+               }
+             ]
+           }
+        }
+    },
+
+    "CustomeResourceForInitization": {
+        "Type": "Custom::CustomeResource",
+        "Properties": {
+            "ServiceToken": {
+                "Fn::GetAtt": [
+                    "Preprocessor",
+                    "Arn"
+                ]
+            },
+            "S3DestinationBucketName": {
+                "Ref": "HostedBucket"
+            },
+            "S3SourceBucketName": {
+                "Ref": "SourceS3Bucket"
+            },
+            "TableNameARN": {
+                "Fn::GetAtt": [
+                    "myDynamoDBTable",
+                    "Arn"
+                ]
+            },
+            "REST_API_ID": {
+                "Ref": "ApiGatewayRestApi"
+            }
+        }
+    },
+
+    "LambdaExecutionRole": {
+        "Type": "AWS::IAM::Role",
+        "Properties": {
+            "AssumeRolePolicyDocument": {
+                "Version": "2012-10-17",
+                "Statement": [
+                    {
+                        "Effect": "Allow",
+                        "Principal": {
+                            "Service": [
+                                "lambda.amazonaws.com"
+                            ]
+                        },
+                        "Action": [
+                            "sts:AssumeRole"
+                        ]
+                    }
+                ]
+            },
+            "Path": "/",
+            "Policies": [
+                {
+                    "PolicyName": "root",
+                    "PolicyDocument": {
+                        "Version": "2012-10-17",
+                        "Statement": [
+                            {
+                                "Effect": "Allow",
+                                "Action": [
+                                    "logs:*"
+                                ],
+                                "Resource": "arn:aws:logs:*:*:*"
+                            },
+                            {
+                                "Effect": "Allow",
+                                "Action": [
+                                    "s3:*"
+                                ],
+                                "Resource": "*"
+                            },
+                            {
+                                "Effect": "Allow",
+                                "Action": [
+                                    "dynamodb:*"
+                                ],
+                                "Resource": "*"
+                            }
+                        ]
+                    }
+                }
+            ]
+        }
+    },
+
+    "Preprocessor": {
+        "Type": "AWS::Lambda::Function",
+        "Properties": {
+            "Handler": "index.lambda_handler",
+            "Role": {
+                "Fn::GetAtt": [
+                    "LambdaExecutionRole",
+                    "Arn"
+                ]
+            },
+            "Code": {
+                "ZipFile": {
+                    "Fn::Join": [
+                        "\n",
+                        [
+                            "",
+                            "import json",
+                            "import boto3",
+                            "import cfnresponse",
+                            "import io",
+                            "",
+                            "ddb = boto3.resource('dynamodb')",
+                            "s3 = boto3.resource('s3')",
+                            "s3_client = boto3.client('s3')",
+                            "",
+                            "def updateURLinScript(srcbucketName,destbucketName,restApiId):",
+                            "    script_file=s3_client.get_object(Bucket=srcbucketName,Key='script.js').get('Body').read().decode('utf-8')",
+                            "    updated_script_file=io.BytesIO(script_file.replace('<#API_ID#>',restApiId).encode())",
+                            "    s3_client.upload_fileobj(updated_script_file,destbucketName,'script.js')",
+                            "",
+                            "",
+                            "def lambda_handler(event, context):",
+                            "    if event['RequestType'] == 'Create':",
+                            "        properties = event['ResourceProperties']",
+                            "        table = ddb.Table(str(properties['TableNameARN']).split('/')[-1])",
+                            "        srcbucketName = properties['S3SourceBucketName']",
+                            "        destbucketName = properties['S3DestinationBucketName']",
+                            "        restApiId = properties['REST_API_ID']",
+                            "        copy_source_index = {'Bucket':srcbucketName, 'Key':'index.html' }",
+                            "        copy_source_error = {'Bucket':srcbucketName, 'Key':'error.html' }",
+                            "        destbucket=s3.Bucket(destbucketName)",
+                            "",
+                            "        try:",
+                            "            table.put_item(Item={'id':'1','task':'Read books'}) ",
+                            "            destbucket.copy(copy_source_index, 'index.html')",
+                            "            destbucket.copy(copy_source_index, 'error.html')",
+                            "            updateURLinScript(srcbucketName,destbucketName,restApiId)",
+                            "",
+                            "        except Exception as e:",
+                            "            print(e)",
+                            "            cfnresponse.send(event, context, cfnresponse.FAILED, {",
+                            "                             'Response': 'Failure'})",
+                            "            return",
+                            "",
+                            "    cfnresponse.send(event, context, cfnresponse.SUCCESS,",
+                            "                     {'Response': 'Success'})"
+                        ]
+                    ]
+                }
+            },
+            "Runtime": "python3.9"
+        }
+        },
+
+        "CustomeResourceForDeletion": {
+            "Type": "Custom::CustomeResourceForDelete",
+            "Properties": {
+                "ServiceToken": {
+                    "Fn::GetAtt": [
+                        "Predeletion",
+                        "Arn"
+                    ]
+                },
+                "S3DestinationBucketName": {
+                    "Ref": "HostedBucket"
+                }
+            }
+        },
+
+        "Predeletion": {
+            "Type": "AWS::Lambda::Function",
+            "Properties": {
+                "Handler": "index.lambda_handler",
+                "Role": {
+                    "Fn::GetAtt": [
+                        "LambdaExecutionRole",
+                        "Arn"
+                    ]
+                },
+                "Code": {
+                    "ZipFile": {
+                        "Fn::Join": [
+                            "\n",
+                            [
+                                "",
+                                "import json",
+                                "import boto3",
+                                "import cfnresponse",
+                                "",
+                                "s3 = boto3.resource('s3')",
+                                "",
+                                "def lambda_handler(event, context):",
+                                "    if event['RequestType'] == 'Delete':",
+                                "        properties = event['ResourceProperties']",
+                                "        destbucketName = properties['S3DestinationBucketName']",
+                                "        destbucket=s3.Bucket(destbucketName)",
+                                "",
+                                "        try:",
+                                "            destbucket.objects.all().delete() ",
+                                "",
+                                "        except Exception as e:",
+                                "            print(e)",
+                                "            cfnresponse.send(event, context, cfnresponse.FAILED, {",
+                                "                             'Response': 'Failure'})",
+                                "            return",
+                                "",
+                                "    cfnresponse.send(event, context, cfnresponse.SUCCESS,",
+                                "                     {'Response': 'Success'})"
+                            ]
+                        ]
+                    }
+                },
+                "Runtime": "python3.9"
+            }
+        }
+
+        
+    },
+    "Outputs":{
+        "WebsiteURL":{
+            "Value": {
+                "Fn::GetAtt": [
+                    "HostedBucket",
+                    "WebsiteURL"
+                ]
+            }
+        },
+        "RestApiId":{
+            "Value": {
+                "Ref":"ApiGatewayRestApi"
+            }
+        }
+    }
+}
+
