@@ -496,11 +496,6 @@
                     "WebsiteURL"
                 ]
             }
-        },
-        "RestApiId":{
-            "Value": {
-                "Ref":"ApiGatewayRestApi"
-            }
         }
     }
 }
